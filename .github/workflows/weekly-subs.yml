@@ -1,0 +1,35 @@
+name: Weekly subscription renewals
+
+on:
+  schedule:
+    - cron: "0 14 * * 1"
+  workflow_dispatch:
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # Edit these to match your Notion database column names / cost type / currency.
+      DATE_PROPERTY: "Next Billing Date"
+      NAME_PROPERTY: "Name"
+      COST_PROPERTY: "Cost Per Unit"
+      COST_TYPE: "number"
+      CURRENCY: "$"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run notifier
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python subscription_notifier.py
