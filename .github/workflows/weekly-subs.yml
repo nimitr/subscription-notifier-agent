@@ -2,7 +2,14 @@ name: Weekly subscription renewals
 
 on:
   schedule:
-    - cron: "0 14 * * 1"
+    # Cron fields: minute hour day-of-month month day-of-week
+    #              0      17   *            *     1
+    # -> "at 17:00 UTC every Monday" (day-of-week 1 = Monday; * = every).
+    # GitHub Actions cron is always UTC and does not observe DST.
+    # 17:00 UTC = 10:00 PDT (Mar–Nov). During PST (Nov–Mar) this fires at
+    # 09:00 PT; if you want a true year-round 10:00 PT, change to "0 18 * * 1"
+    # during PST months.
+    - cron: "0 17 * * 1"
   workflow_dispatch:
 
 jobs:
