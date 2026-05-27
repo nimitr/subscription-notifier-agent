@@ -94,7 +94,18 @@ def extract_title(prop: dict) -> str:
 
 
 def extract_date(prop: dict) -> str | None:
-    """Pull the ISO `start` string out of a Notion date property, if present."""
+    """Pull the ISO `start` string out of a Notion date property, if present.
+
+    Handles both shapes:
+      - Plain date column:    properties[X].date.start
+      - Formula returning a date: properties[X].formula.date.start
+    """
+    if prop.get("type") == "formula":
+        f = prop.get("formula") or {}
+        if f.get("type") == "date":
+            d = f.get("date") or {}
+            return d.get("start")
+        return None
     d = prop.get("date") or {}
     return d.get("start")
 
@@ -180,7 +191,9 @@ def build_message(items: list[dict], currency: str) -> tuple[str, str, str]:
     n = len(items)
     if numeric_costs:
         total = sum(numeric_costs)
-        title = f"{n} renewal(s) this week — {currency}{total:.2f}"
+        # ASCII-only here: this string becomes an HTTP header (ntfy `Title`),
+        # which must be latin-1 encodable. Em-dashes etc. crash requests.
+        title = f"{n} renewal(s) this week - {currency}{total:.2f}"
     else:
         # Suppress the total when nothing parsed — showing "$0.00" would be
         # misleading if costs exist but couldn't be read.
