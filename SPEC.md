@@ -6,13 +6,13 @@ subscriptions database for renewals due in the current week (Mon–Sun),
 and pushes a summary notification to my phone via ntfy.
 
 ## My configuration (fill these in before running)
-- Notion database ID: `32ef9576bfcf8003b601c4e1b5e79329`
-- Notion column for billing date (exact name, case-sensitive): `Next Billing Date`
-- Notion column for subscription name (title property): `Name`
-- Notion column for cost (exact name, case-sensitive): `Cost Per Unit`
-- Notion column type for cost (`number` or `rich_text`): `number`
-- Currency symbol to display (e.g. `$`, `€`, `£`): `$`
-- ntfy topic name: `sub-notice18493adjwlxnsm`
+- Notion database ID: `TODO`
+- Notion column for billing date (exact name, case-sensitive): `TODO`
+- Notion column for subscription name (title property): `TODO`
+- Notion column for cost (exact name, case-sensitive): `TODO`
+- Notion column type for cost (`number` or `rich_text`): `TODO`
+- Currency symbol to display (e.g. `$`, `€`, `£`): `TODO`
+- ntfy topic name: `TODO`
 
 ## Architecture
 1. Python script (`subscription_notifier.py`) does the work.
