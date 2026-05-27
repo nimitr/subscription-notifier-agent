@@ -2,13 +2,17 @@
 """Weekly subscription renewal notifier: Notion -> ntfy.
 
 High-level flow:
-    1. Compute the date range for the current week (Mon–Sun, local to UTC).
-    2. Query a Notion database for pages whose date property falls in that
-       range, paginating through all results.
-    3. Extract name / due date / cost from each page's properties, tolerating
-       both `number` and `rich_text` cost columns.
-    4. Build a single ntfy notification — a summary title plus a bullet-list
-       body — and POST it to the configured topic.
+    1. Compute a rolling 14-day window anchored on today, split into two
+       7-day halves ("next 7 days" and "the week after").
+    2. Query the Notion database once over the full 14-day range and
+       paginate through all results.
+    3. Extract name / due date / cost from each page, tolerating both
+       `number` and `rich_text` cost columns and plain-date or
+       formula-date columns.
+    4. Partition the rows into "next 7 days" vs. "the week after" (days
+       8–14) — mutually exclusive so nothing is counted twice.
+    5. Build a single ntfy notification with both sections clearly labelled
+       and POST it to the configured topic.
 
 All configuration is read from environment variables; see README.md for the
 full list. The script is intended to be run from a GitHub Actions cron job,
@@ -29,15 +33,16 @@ NOTION_API_VERSION = "2022-06-28"
 NOTION_BASE = "https://api.notion.com/v1"
 
 
-def week_bounds(today: date) -> tuple[date, date]:
-    """Return (Monday, Sunday) of the ISO week containing `today`.
+def upcoming_windows(today: date) -> tuple[date, date]:
+    """Return (week1_end, week2_end) for the two rolling 7-day windows.
 
-    `weekday()` returns 0 for Monday through 6 for Sunday, so subtracting
-    that many days always lands on Monday regardless of which day we run on.
+    - "Next 7 days"     = [today, today + 6]    (week1)
+    - "The week after"  = [today + 7, today + 13] (week2, days 8–14)
+    - Full query range  = [today, today + 13]
     """
-    monday = today - timedelta(days=today.weekday())
-    sunday = monday + timedelta(days=6)
-    return monday, sunday
+    week1_end = today + timedelta(days=6)
+    week2_end = today + timedelta(days=13)
+    return week1_end, week2_end
 
 
 def query_notion(token: str, database_id: str, date_prop: str,
@@ -55,7 +60,7 @@ def query_notion(token: str, database_id: str, date_prop: str,
         "Notion-Version": NOTION_API_VERSION,
         "Content-Type": "application/json",
     }
-    # Compound `and` filter: due date must fall on or between Monday and Sunday.
+    # Compound `and` filter: due date must fall on or between start and end.
     base_payload = {
         "filter": {
             "and": [
@@ -172,33 +177,33 @@ def format_date(iso: str) -> str:
     return dt.strftime("%a %b %d")
 
 
-def build_message(items: list[dict], currency: str) -> tuple[str, str, str]:
-    """Compose the ntfy (title, body, priority) for this week's renewals.
+def parse_iso_date(iso: str | None) -> date | None:
+    """Parse the first 10 chars of an ISO date(time) string into a `date`.
 
-    Behavior:
-      - Empty week  -> a low-priority "nothing scheduled" notification so it
-        doesn't buzz the phone.
-      - Non-empty   -> title includes a count and (if any numeric costs
-        exist) a summed total; body is a bullet list, one renewal per line.
+    Returns None on missing / unparseable input so callers can defer
+    classification rather than crash.
     """
-    if not items:
-        return ("No renewals this week", "Nothing scheduled this week.", "low")
+    if not iso:
+        return None
+    try:
+        y, m, d = iso[:10].split("-")
+        return date(int(y), int(m), int(d))
+    except Exception:
+        return None
 
-    # Only sum costs we actually parsed as numbers; mixing in `None` would
-    # crash, and silently treating missing values as 0 would understate
-    # spend.
-    numeric_costs = [it["cost_num"] for it in items if it["cost_num"] is not None]
-    n = len(items)
-    if numeric_costs:
-        total = sum(numeric_costs)
-        # ASCII-only here: this string becomes an HTTP header (ntfy `Title`),
-        # which must be latin-1 encodable. Em-dashes etc. crash requests.
-        title = f"{n} renewal(s) this week - {currency}{total:.2f}"
-    else:
-        # Suppress the total when nothing parsed — showing "$0.00" would be
-        # misleading if costs exist but couldn't be read.
-        title = f"{n} renewal(s) this week"
 
+def sum_costs(items: list[dict]) -> float | None:
+    """Sum the numeric costs in `items`, returning None if none parsed.
+
+    Returning None (rather than 0.0) lets callers suppress a misleading
+    "$0.00" total when there are entries but no parseable costs.
+    """
+    nums = [it["cost_num"] for it in items if it["cost_num"] is not None]
+    return sum(nums) if nums else None
+
+
+def render_bullets(items: list[dict], currency: str) -> str:
+    """Render a list of items as a newline-separated bullet block."""
     lines = []
     for it in items:
         # Cost rendering precedence: parsed number > raw display string > em-dash.
@@ -210,7 +215,72 @@ def build_message(items: list[dict], currency: str) -> tuple[str, str, str]:
             cost_str = "—"
         date_str = format_date(it["due"]) if it["due"] else "—"
         lines.append(f"• {it['name']} — {date_str} — {cost_str}")
-    return (title, "\n".join(lines), "default")
+    return "\n".join(lines)
+
+
+def section_header(label: str, items: list[dict], currency: str) -> str:
+    """Build a body-section header like '== This week (2) - $30.48 =='.
+
+    Total is omitted when no costs could be parsed, to avoid implying $0.00.
+    """
+    total = sum_costs(items)
+    if total is not None:
+        return f"== {label} ({len(items)}) - {currency}{total:.2f} =="
+    return f"== {label} ({len(items)}) =="
+
+
+def build_message(next_7: list[dict], week_after: list[dict],
+                  currency: str) -> tuple[str, str, str]:
+    """Compose the ntfy (title, body, priority) for the renewal summary.
+
+    Renders up to two clearly delimited sections — "Next 7 days" and
+    "The week after (days 8-14)" — and a one-line title that reflects
+    which sections are populated. When both sections are empty, sends a
+    low-priority "nothing scheduled" ping so it doesn't buzz the phone.
+    """
+    nw, na = len(next_7), len(week_after)
+    week_total = sum_costs(next_7)
+    after_total = sum_costs(week_after)
+
+    # --- Empty case: low-priority heads-down message ----------------------
+    if nw == 0 and na == 0:
+        return ("No renewals in the next 14 days",
+                "Nothing scheduled in the next 14 days.",
+                "low")
+
+    # --- Title: ASCII only (ntfy `Title` becomes an HTTP header) ----------
+    def fmt(label: str, n: int, total: float | None) -> str:
+        if total is not None:
+            return f"{label}: {n} ({currency}{total:.2f})"
+        return f"{label}: {n}"
+
+    if nw and na:
+        title = f"{fmt('Next 7d', nw, week_total)} | {fmt('Week after', na, after_total)}"
+    elif nw:
+        if week_total is not None:
+            title = f"{nw} renewal(s) in next 7 days - {currency}{week_total:.2f}"
+        else:
+            title = f"{nw} renewal(s) in next 7 days"
+    else:  # only week-after
+        if after_total is not None:
+            title = (f"Nothing this week. {na} renewal(s) the week after "
+                     f"- {currency}{after_total:.2f}")
+        else:
+            title = f"Nothing this week. {na} renewal(s) the week after"
+
+    # --- Body: render each non-empty section with a header ----------------
+    blocks: list[str] = []
+    if next_7:
+        blocks.append(section_header("Next 7 days", next_7, currency)
+                      + "\n" + render_bullets(next_7, currency))
+    else:
+        blocks.append("== Next 7 days (0) ==\nNothing scheduled.")
+    if week_after:
+        blocks.append(section_header("The week after (days 8-14)", week_after, currency)
+                      + "\n" + render_bullets(week_after, currency))
+    # Blank line between sections for readability.
+    body = "\n\n".join(blocks)
+    return (title, body, "default")
 
 
 def send_ntfy(server: str, topic: str, title: str, body: str, priority: str) -> None:
@@ -261,12 +331,16 @@ def main() -> None:
               file=sys.stderr)
         sys.exit(2)
 
-    # --- 1. Compute the week window ---------------------------------------
-    monday, sunday = week_bounds(date.today())
-    print(f"Querying renewals from {monday} to {sunday}")
+    # --- 1. Compute the two rolling 7-day windows -------------------------
+    today = date.today()
+    week1_end, week2_end = upcoming_windows(today)
+    query_start, query_end = today, week2_end
+    print(f"Querying renewals from {query_start} to {query_end} "
+          f"(next 7d: {today}..{week1_end}, days 8-14: "
+          f"{today + timedelta(days=7)}..{week2_end})")
 
     # --- 2. Fetch matching pages from Notion ------------------------------
-    pages = query_notion(token, database_id, date_prop, monday, sunday)
+    pages = query_notion(token, database_id, date_prop, query_start, query_end)
     print(f"Notion returned {len(pages)} page(s)")
 
     # --- 3. Reshape Notion's verbose property objects into flat dicts -----
@@ -283,8 +357,29 @@ def main() -> None:
             "cost_display": cost_display,
         })
 
-    # --- 4. Build the message and ship it ---------------------------------
-    title, body, priority = build_message(items, currency)
+    # --- 4. Partition into next-7-days vs. the-week-after (days 8-14) -----
+    # Buckets are mutually exclusive. Rows with no parseable date default
+    # to the near bucket so they're not silently dropped.
+    next_7: list[dict] = []
+    week_after: list[dict] = []
+    for it in items:
+        d = parse_iso_date(it["due"])
+        if d is None:
+            next_7.append(it)
+            continue
+        if today <= d <= week1_end:
+            next_7.append(it)
+        elif week1_end < d <= week2_end:
+            week_after.append(it)
+        else:
+            # Outside the query range — shouldn't happen, but keep the row.
+            next_7.append(it)
+
+    print(f"Partitioned: {len(next_7)} in next 7 days, "
+          f"{len(week_after)} in days 8-14")
+
+    # --- 5. Build the message and ship it ---------------------------------
+    title, body, priority = build_message(next_7, week_after, currency)
     # Log the outgoing message so it's visible in the Actions run log — handy
     # for debugging without having to re-query Notion.
     print(f"Sending ntfy: {title}")
