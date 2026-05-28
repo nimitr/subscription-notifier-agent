@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Subscription Notifier — Architecture &amp; Walkthrough</title>
+<style>
+  :root {
+    --bg: #0b0f17;
+    --bg-soft: #131a26;
+    --bg-card: #18212f;
+    --border: #243042;
+    --text: #e7ecf3;
+    --text-dim: #9aa6b8;
+    --accent: #7dd3fc;
+    --accent-2: #a78bfa;
+    --accent-3: #fbbf24;
+    --accent-4: #34d399;
+    --notion: #ffffff;
+    --gha: #2088ff;
+    --ntfy: #4ade80;
+    --phone: #f472b6;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.6;
+  }
+  body {
+    background:
+      radial-gradient(ellipse 80% 60% at 20% 0%, rgba(125, 211, 252, 0.12), transparent),
+      radial-gradient(ellipse 70% 50% at 80% 10%, rgba(167, 139, 250, 0.10), transparent),
+      var(--bg);
+    min-height: 100vh;
+  }
+  main { max-width: 1100px; margin: 0 auto; padding: 48px 24px 96px; }
+
+  /* Hero */
+  .hero { text-align: center; padding: 48px 0 64px; }
+  .hero .eyebrow {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    color: var(--accent);
+    background: rgba(125, 211, 252, 0.08);
+    border: 1px solid rgba(125, 211, 252, 0.25);
+    padding: 4px 12px;
+    border-radius: 999px;
+    margin-bottom: 16px;
+    letter-spacing: 0.05em;
+  }
+  .hero h1 {
+    font-size: clamp(2rem, 5vw, 3.5rem);
+    line-height: 1.1;
+    margin: 0 0 16px;
+    background: linear-gradient(135deg, #7dd3fc 0%, #a78bfa 50%, #f472b6 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero p {
+    font-size: 1.15rem;
+    color: var(--text-dim);
+    max-width: 640px;
+    margin: 0 auto;
+  }
+
+  section { margin: 64px 0; }
+  h2 {
+    font-size: 1.75rem;
+    margin: 0 0 8px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  h2 .num {
+    font-family: var(--mono);
+    font-size: 0.9rem;
+    color: var(--accent);
+    background: rgba(125, 211, 252, 0.10);
+    border: 1px solid rgba(125, 211, 252, 0.25);
+    width: 32px; height: 32px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 8px;
+  }
+  h2 + p.lead { color: var(--text-dim); margin: 0 0 24px; font-size: 1.05rem; }
+  h3 { font-size: 1.2rem; margin: 24px 0 8px; color: var(--accent); }
+
+  /* Cards */
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+  }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 768px) {
+    .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  }
+
+  /* Architecture diagram */
+  .arch {
+    background: var(--bg-soft);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 32px;
+  }
+  .arch svg { width: 100%; height: auto; display: block; }
+
+  /* Flow steps */
+  .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-top: 24px; }
+  @media (max-width: 900px) { .flow { grid-template-columns: 1fr 1fr; } }
+  .step {
+    position: relative;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .step .step-num {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--accent-2);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+  .step .step-title { font-weight: 600; font-size: 0.95rem; }
+  .step .step-desc { font-size: 0.85rem; color: var(--text-dim); }
+  .step .icon {
+    width: 28px; height: 28px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 8px;
+    background: rgba(167, 139, 250, 0.12);
+    color: var(--accent-2);
+  }
+
+  /* Code */
+  pre {
+    background: #0a0e15;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    line-height: 1.55;
+    color: #d1d5db;
+    margin: 0;
+  }
+  code.inline {
+    font-family: var(--mono);
+    font-size: 0.85em;
+    background: rgba(125, 211, 252, 0.08);
+    color: var(--accent);
+    padding: 1px 6px;
+    border-radius: 4px;
+    border: 1px solid rgba(125, 211, 252, 0.2);
+  }
+  .k { color: #c084fc; }   /* keyword */
+  .s { color: #86efac; }   /* string */
+  .c { color: #64748b; font-style: italic; } /* comment */
+  .f { color: #fcd34d; }   /* function */
+  .n { color: #93c5fd; }   /* number */
+  .t { color: #f9a8d4; }   /* type */
+
+  /* Function cards */
+  .func {
+    margin-bottom: 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .func .head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 18px;
+    background: linear-gradient(90deg, rgba(125,211,252,0.06), transparent);
+    border-bottom: 1px solid var(--border);
+  }
+  .func .head .name {
+    font-family: var(--mono);
+    color: var(--accent);
+    font-size: 0.95rem;
+  }
+  .func .head .tag {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    padding: 2px 8px;
+    border-radius: 6px;
+  }
+  .func .body { padding: 16px 18px; color: var(--text-dim); font-size: 0.92rem; }
+  .func .body strong { color: var(--text); }
+
+  /* Config table */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  th {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    font-weight: 500;
+  }
+  td code {
+    font-family: var(--mono);
+    color: var(--accent);
+    font-size: 0.85em;
+  }
+  .req {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+  .req.y { background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid rgba(239,68,68,0.3); }
+  .req.n { background: rgba(148,163,184,0.10); color: var(--text-dim); border: 1px solid var(--border); }
+
+  /* Phone mock */
+  .phone-mock {
+    background: linear-gradient(180deg, #1f2937, #111827);
+    border: 1px solid #374151;
+    border-radius: 24px;
+    padding: 16px;
+    max-width: 320px;
+    margin: 0 auto;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+  }
+  .phone-mock .notif {
+    background: rgba(255,255,255,0.95);
+    color: #111;
+    border-radius: 14px;
+    padding: 12px 14px;
+    font-size: 0.85rem;
+  }
+  .phone-mock .notif .app {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 0.7rem; color: #6b7280;
+    margin-bottom: 6px;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .phone-mock .notif .app .dot {
+    width: 16px; height: 16px; border-radius: 4px;
+    background: linear-gradient(135deg, #4ade80, #22c55e);
+  }
+  .phone-mock .notif .title { font-weight: 600; margin-bottom: 4px; }
+  .phone-mock .notif pre.body {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: #374151;
+    white-space: pre-wrap;
+    margin-top: 6px;
+  }
+
+  /* Timeline / windows */
+  .windows {
+    background: var(--bg-soft);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin-top: 16px;
+  }
+  .timeline {
+    position: relative;
+    height: 70px;
+    background: linear-gradient(90deg, rgba(125,211,252,0.18), rgba(167,139,250,0.18) 50%, rgba(167,139,250,0.04));
+    border-radius: 8px;
+    margin: 16px 0 8px;
+  }
+  .tl-split {
+    position: absolute;
+    left: 50%; top: -4px; bottom: -4px;
+    width: 2px;
+    background: var(--bg);
+    border-left: 1px dashed var(--accent-3);
+  }
+  .tl-label {
+    position: absolute;
+    top: 50%; transform: translateY(-50%);
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    padding: 4px 10px;
+    background: rgba(11,15,23,0.7);
+    border-radius: 6px;
+    border: 1px solid var(--border);
+  }
+  .tl-label.left { left: 16px; color: var(--accent); }
+  .tl-label.right { right: 16px; color: var(--accent-2); }
+  .tl-axis {
+    display: flex; justify-content: space-between;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    padding: 0 4px;
+  }
+
+  /* Misc */
+  .pill {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    margin-right: 6px;
+  }
+  .pill.accent { color: var(--accent); border-color: rgba(125,211,252,0.3); background: rgba(125,211,252,0.08); }
+
+  footer {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    margin-top: 80px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+  }
+  footer code { font-family: var(--mono); color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+
+<!-- HERO -->
+<div class="hero">
+  <span class="eyebrow">PROJECT WALKTHROUGH</span>
+  <h1>Subscription Renewal Notifier</h1>
+  <p>An autonomous agent that watches a Notion database, computes upcoming renewals, and pings a phone — all in ~270 lines of Python, running for free on GitHub Actions.</p>
+  <div style="margin-top: 24px;">
+    <span class="pill accent">Python 3.12</span>
+    <span class="pill">GitHub Actions</span>
+    <span class="pill">Notion API</span>
+    <span class="pill">ntfy.sh</span>
+    <span class="pill">Weekly cron</span>
+  </div>
+</div>
+
+<!-- THE IDEA -->
+<section>
+  <h2><span class="num">1</span> The idea</h2>
+  <p class="lead">Subscriptions sneak up on you. Notion knows when they renew. The phone knows how to interrupt. Glue.</p>
+  <div class="grid-3">
+    <div class="card">
+      <h3>The problem</h3>
+      <p style="color:var(--text-dim); margin:0;">Recurring charges hit the card silently. Knowing on Monday what's about to charge this week (and the week after) makes them cancellable, not lamentable.</p>
+    </div>
+    <div class="card">
+      <h3>The data</h3>
+      <p style="color:var(--text-dim); margin:0;">A Notion database tracks each subscription: name, cost, next billing date. The billing date can even be a Notion formula — the script handles both shapes.</p>
+    </div>
+    <div class="card">
+      <h3>The delivery</h3>
+      <p style="color:var(--text-dim); margin:0;">ntfy.sh is a free push service: HTTP <code class="inline">POST</code> a body, the phone buzzes. No auth, no SDK, no app account — just a topic name.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ARCHITECTURE -->
+<section>
+  <h2><span class="num">2</span> Architecture</h2>
+  <p class="lead">Four moving parts. One direction of data flow. No servers to run.</p>
+  <div class="arch">
+    <svg viewBox="0 0 1000 360" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#7dd3fc"/>
+        </marker>
+        <linearGradient id="g-gha" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#1e40af"/><stop offset="100%" stop-color="#0c4a6e"/>
+        </linearGradient>
+        <linearGradient id="g-notion" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#1f2937"/><stop offset="100%" stop-color="#111827"/>
+        </linearGradient>
+        <linearGradient id="g-ntfy" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#065f46"/><stop offset="100%" stop-color="#064e3b"/>
+        </linearGradient>
+        <linearGradient id="g-phone" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#9d174d"/><stop offset="100%" stop-color="#831843"/>
+        </linearGradient>
+      </defs>
+
+      <!-- Clock / cron -->
+      <g transform="translate(40, 140)">
+        <circle cx="40" cy="40" r="36" fill="none" stroke="#fbbf24" stroke-width="2"/>
+        <line x1="40" y1="40" x2="40" y2="14" stroke="#fbbf24" stroke-width="2.5" stroke-linecap="round"/>
+        <line x1="40" y1="40" x2="60" y2="40" stroke="#fbbf24" stroke-width="2" stroke-linecap="round"/>
+        <text x="40" y="100" text-anchor="middle" fill="#fbbf24" font-family="ui-monospace" font-size="11">cron</text>
+        <text x="40" y="115" text-anchor="middle" fill="#9aa6b8" font-family="ui-monospace" font-size="10">Mon 17:00 UTC</text>
+      </g>
+
+      <!-- GitHub Actions -->
+      <g transform="translate(180, 110)">
+        <rect width="180" height="140" rx="14" fill="url(#g-gha)" stroke="#2563eb" stroke-width="1"/>
+        <text x="90" y="34" text-anchor="middle" fill="white" font-weight="600" font-size="15">GitHub Actions</text>
+        <text x="90" y="56" text-anchor="middle" fill="#bfdbfe" font-family="ui-monospace" font-size="10">weekly-subs.yml</text>
+        <rect x="20" y="74" width="140" height="22" rx="4" fill="rgba(255,255,255,0.08)"/>
+        <text x="90" y="89" text-anchor="middle" fill="#e7ecf3" font-family="ui-monospace" font-size="10">checkout + setup-python</text>
+        <rect x="20" y="102" width="140" height="22" rx="4" fill="rgba(255,255,255,0.08)"/>
+        <text x="90" y="117" text-anchor="middle" fill="#e7ecf3" font-family="ui-monospace" font-size="10">python notifier.py</text>
+      </g>
+
+      <!-- Arrow GHA -> Notion -->
+      <line x1="365" y1="160" x2="475" y2="160" stroke="#7dd3fc" stroke-width="2" marker-end="url(#arrow)"/>
+      <text x="420" y="150" text-anchor="middle" fill="#7dd3fc" font-family="ui-monospace" font-size="10">POST /query</text>
+
+      <!-- Arrow Notion -> GHA (return) -->
+      <line x1="475" y1="200" x2="365" y2="200" stroke="#a78bfa" stroke-width="2" marker-end="url(#arrow)" stroke-dasharray="4 4"/>
+      <text x="420" y="220" text-anchor="middle" fill="#a78bfa" font-family="ui-monospace" font-size="10">pages[]</text>
+
+      <!-- Notion -->
+      <g transform="translate(480, 110)">
+        <rect width="160" height="140" rx="14" fill="url(#g-notion)" stroke="#4b5563" stroke-width="1"/>
+        <text x="80" y="34" text-anchor="middle" fill="white" font-weight="600" font-size="15">Notion DB</text>
+        <text x="80" y="56" text-anchor="middle" fill="#9aa6b8" font-family="ui-monospace" font-size="10">Subscriptions</text>
+        <g transform="translate(16, 70)">
+          <rect width="128" height="16" rx="3" fill="rgba(255,255,255,0.06)"/>
+          <text x="6" y="12" fill="#e7ecf3" font-family="ui-monospace" font-size="9">Name</text>
+          <text x="120" y="12" text-anchor="end" fill="#9aa6b8" font-family="ui-monospace" font-size="9">title</text>
+        </g>
+        <g transform="translate(16, 90)">
+          <rect width="128" height="16" rx="3" fill="rgba(255,255,255,0.06)"/>
+          <text x="6" y="12" fill="#e7ecf3" font-family="ui-monospace" font-size="9">Cost Per Unit</text>
+          <text x="120" y="12" text-anchor="end" fill="#9aa6b8" font-family="ui-monospace" font-size="9">number</text>
+        </g>
+        <g transform="translate(16, 110)">
+          <rect width="128" height="16" rx="3" fill="rgba(255,255,255,0.06)"/>
+          <text x="6" y="12" fill="#e7ecf3" font-family="ui-monospace" font-size="9">Next Billing</text>
+          <text x="120" y="12" text-anchor="end" fill="#9aa6b8" font-family="ui-monospace" font-size="9">formula</text>
+        </g>
+      </g>
+
+      <!-- Arrow GHA -> ntfy -->
+      <path d="M 270 250 Q 270 310 720 310 Q 800 310 800 250" stroke="#34d399" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+      <text x="500" y="330" text-anchor="middle" fill="#34d399" font-family="ui-monospace" font-size="10">POST ntfy.sh/&lt;topic&gt; (title header + body)</text>
+
+      <!-- ntfy -->
+      <g transform="translate(720, 110)">
+        <rect width="160" height="140" rx="14" fill="url(#g-ntfy)" stroke="#10b981" stroke-width="1"/>
+        <text x="80" y="34" text-anchor="middle" fill="white" font-weight="600" font-size="15">ntfy.sh</text>
+        <text x="80" y="56" text-anchor="middle" fill="#a7f3d0" font-family="ui-monospace" font-size="10">public broker</text>
+        <text x="80" y="92" text-anchor="middle" fill="#d1fae5" font-family="ui-monospace" font-size="11">topic:</text>
+        <text x="80" y="110" text-anchor="middle" fill="white" font-family="ui-monospace" font-size="10">sub-notice-***</text>
+        <text x="80" y="128" text-anchor="middle" fill="#a7f3d0" font-family="ui-monospace" font-size="9">no auth · no SDK</text>
+      </g>
+
+      <!-- Arrow ntfy -> phone -->
+      <line x1="900" y1="160" x2="935" y2="160" stroke="#f472b6" stroke-width="2" marker-end="url(#arrow)"/>
+
+      <!-- Phone -->
+      <g transform="translate(935, 105)">
+        <rect width="50" height="90" rx="8" fill="url(#g-phone)" stroke="#ec4899" stroke-width="1"/>
+        <rect x="6" y="10" width="38" height="60" rx="3" fill="rgba(255,255,255,0.95)"/>
+        <line x1="14" y1="20" x2="36" y2="20" stroke="#831843" stroke-width="1.5"/>
+        <line x1="14" y1="28" x2="32" y2="28" stroke="#831843" stroke-width="1"/>
+        <line x1="14" y1="34" x2="36" y2="34" stroke="#831843" stroke-width="1"/>
+        <line x1="14" y1="40" x2="28" y2="40" stroke="#831843" stroke-width="1"/>
+        <circle cx="25" cy="80" r="3" fill="rgba(255,255,255,0.6)"/>
+      </g>
+
+      <!-- Labels for env block -->
+      <g transform="translate(180, 50)">
+        <rect width="180" height="36" rx="6" fill="rgba(255,255,255,0.04)" stroke="#243042"/>
+        <text x="90" y="16" text-anchor="middle" fill="#9aa6b8" font-family="ui-monospace" font-size="9">SECRETS (GitHub)</text>
+        <text x="90" y="30" text-anchor="middle" fill="#e7ecf3" font-family="ui-monospace" font-size="10">NOTION_TOKEN · DB_ID · TOPIC</text>
+      </g>
+      <line x1="270" y1="86" x2="270" y2="110" stroke="#9aa6b8" stroke-width="1" stroke-dasharray="2 2"/>
+    </svg>
+  </div>
+</section>
+
+<!-- FLOW -->
+<section>
+  <h2><span class="num">3</span> Execution flow</h2>
+  <p class="lead">One run, top to bottom. Each Monday at 17:00 UTC (or on demand via the Actions tab).</p>
+  <div class="flow">
+    <div class="step">
+      <div class="icon">①</div>
+      <div class="step-num">windows</div>
+      <div class="step-title">Compute two 7-day windows</div>
+      <div class="step-desc">Anchor on <em>today</em>: days 1–7 = "next 7", days 8–14 = "the week after".</div>
+    </div>
+    <div class="step">
+      <div class="icon">②</div>
+      <div class="step-num">query</div>
+      <div class="step-title">Query Notion</div>
+      <div class="step-desc">Single paginated <code class="inline">/databases/{id}/query</code> over the full 14 days.</div>
+    </div>
+    <div class="step">
+      <div class="icon">③</div>
+      <div class="step-num">extract</div>
+      <div class="step-title">Flatten properties</div>
+      <div class="step-desc">Pull <code class="inline">name</code>, <code class="inline">due</code>, <code class="inline">cost</code> out of Notion's nested shape.</div>
+    </div>
+    <div class="step">
+      <div class="icon">④</div>
+      <div class="step-num">partition</div>
+      <div class="step-title">Split into two buckets</div>
+      <div class="step-desc">Mutually exclusive — nothing counted twice. No-date rows fall into the near bucket.</div>
+    </div>
+    <div class="step">
+      <div class="icon">⑤</div>
+      <div class="step-num">notify</div>
+      <div class="step-title">POST to ntfy</div>
+      <div class="step-desc">ASCII title header + UTF-8 body. Phone buzzes ~1s later.</div>
+    </div>
+  </div>
+</section>
+
+<!-- TIME WINDOWS -->
+<section>
+  <h2><span class="num">4</span> The two windows</h2>
+  <p class="lead">Why rolling 7+7 instead of calendar weeks/months? No edge cases — the same partition works every day of the year.</p>
+  <div class="windows">
+    <div class="tl-axis"><span>today</span><span>+7d</span><span>+14d</span></div>
+    <div class="timeline">
+      <div class="tl-split"></div>
+      <div class="tl-label left">Next 7 days</div>
+      <div class="tl-label right">Week after (8–14)</div>
+    </div>
+    <p style="color:var(--text-dim); margin: 16px 0 0; font-size: 0.92rem;">
+      <strong>Why not calendar months?</strong> Run during the last week of a month and the "later this month" bucket is always empty. Run during the first week and it's enormous. Rolling windows smooth that out and let the same code path work every Monday — no special "are we at the end of the month?" branch.
+    </p>
+  </div>
+</section>
+
+<!-- CODE WALKTHROUGH -->
+<section>
+  <h2><span class="num">5</span> Code walkthrough</h2>
+  <p class="lead">The script is one file. Here's what each notable piece does and why.</p>
+
+  <div class="func">
+    <div class="head">
+      <span class="name">week_bounds removed → upcoming_windows(today)</span>
+      <span class="tag">windowing</span>
+    </div>
+    <div class="body">
+      <p>Returns the two boundary dates for the rolling 7+7 partition. Pure function, no I/O — trivially testable.</p>
+<pre><span class="k">def</span> <span class="f">upcoming_windows</span>(today: <span class="t">date</span>) -> <span class="t">tuple</span>[<span class="t">date</span>, <span class="t">date</span>]:
+    week1_end = today + timedelta(days=<span class="n">6</span>)   <span class="c"># inclusive end of window 1</span>
+    week2_end = today + timedelta(days=<span class="n">13</span>)  <span class="c"># inclusive end of window 2</span>
+    <span class="k">return</span> week1_end, week2_end</pre>
+    </div>
+  </div>
+
+  <div class="func">
+    <div class="head">
+      <span class="name">query_notion(...)</span>
+      <span class="tag">Notion HTTP + pagination</span>
+    </div>
+    <div class="body">
+      <p>Posts a compound <strong>AND</strong> filter (<code class="inline">on_or_after</code> + <code class="inline">on_or_before</code>) and loops on <code class="inline">has_more</code>/<code class="inline">next_cursor</code> until every matching page is collected. Sorted ascending by date in the request, so no client-side sort is needed.</p>
+<pre><span class="k">while</span> <span class="k">True</span>:
+    payload = dict(base_payload)
+    <span class="k">if</span> cursor:
+        payload[<span class="s">"start_cursor"</span>] = cursor
+    resp = requests.post(url, headers=headers, json=payload, timeout=<span class="n">30</span>)
+    resp.raise_for_status()  <span class="c"># surface HTTP errors in the Actions log</span>
+    data = resp.json()
+    results.extend(data.get(<span class="s">"results"</span>, []))
+    <span class="k">if</span> <span class="k">not</span> data.get(<span class="s">"has_more"</span>):
+        <span class="k">break</span>
+    cursor = data.get(<span class="s">"next_cursor"</span>)</pre>
+    </div>
+  </div>
+
+  <div class="func">
+    <div class="head">
+      <span class="name">extract_date(prop)</span>
+      <span class="tag">Notion shape juggling</span>
+    </div>
+    <div class="body">
+      <p>Notion's API returns dates two different ways depending on whether the column is a plain date or a formula. This function papers over both shapes — added after a real-world debug session where the filter matched rows but the date came out empty.</p>
+<pre><span class="k">if</span> prop.get(<span class="s">"type"</span>) == <span class="s">"formula"</span>:
+    f = prop.get(<span class="s">"formula"</span>) or {}
+    <span class="k">if</span> f.get(<span class="s">"type"</span>) == <span class="s">"date"</span>:
+        <span class="k">return</span> (f.get(<span class="s">"date"</span>) or {}).get(<span class="s">"start"</span>)
+    <span class="k">return</span> <span class="k">None</span>
+<span class="k">return</span> (prop.get(<span class="s">"date"</span>) or {}).get(<span class="s">"start"</span>)</pre>
+    </div>
+  </div>
+
+  <div class="func">
+    <div class="head">
+      <span class="name">extract_cost(prop, cost_type)</span>
+      <span class="tag">dual-mode cost parsing</span>
+    </div>
+    <div class="body">
+      <p>Cost columns can be <code class="inline">number</code> (straight float) or <code class="inline">rich_text</code> (best-effort parsed via regex strip). Returns a <code class="inline">(numeric, display)</code> tuple where exactly one side is meaningful — the display string survives if parsing fails so the user always sees <em>something</em>.</p>
+    </div>
+  </div>
+
+  <div class="func">
+    <div class="head">
+      <span class="name">partition loop in main()</span>
+      <span class="tag">classification</span>
+    </div>
+    <div class="body">
+      <p>Splits flat rows into the two buckets. The buckets are mutually exclusive by construction (the <code class="inline">elif</code> guarantees it).</p>
+<pre><span class="k">for</span> it <span class="k">in</span> items:
+    d = parse_iso_date(it[<span class="s">"due"</span>])
+    <span class="k">if</span> d <span class="k">is</span> <span class="k">None</span>:
+        next_7.append(it)         <span class="c"># default no-date rows to near bucket</span>
+        <span class="k">continue</span>
+    <span class="k">if</span> today &lt;= d &lt;= week1_end:
+        next_7.append(it)
+    <span class="k">elif</span> week1_end &lt; d &lt;= week2_end:
+        week_after.append(it)
+    <span class="k">else</span>:
+        next_7.append(it)         <span class="c"># shouldn't happen, but don't drop</span></pre>
+    </div>
+  </div>
+
+  <div class="func">
+    <div class="head">
+      <span class="name">send_ntfy(...)</span>
+      <span class="tag">HTTP header gotchas</span>
+    </div>
+    <div class="body">
+      <p>ntfy uses <strong>HTTP headers</strong> for title/priority/tags, not JSON. Headers must be latin-1 encodable, so the title is constrained to ASCII — em-dashes (<code class="inline">—</code>) crash <code class="inline">requests</code> here. The body is the raw POST data, explicitly UTF-8 encoded, so unicode bullets and dashes work fine in the body.</p>
+    </div>
+  </div>
+
+  <div class="func">
+    <div class="head">
+      <span class="name">build_message(next_7, week_after, currency)</span>
+      <span class="tag">presentation</span>
+    </div>
+    <div class="body">
+      <p>Composes the ntfy title + body. Adapts to four states: both buckets populated, only the near bucket, only the far bucket, or completely empty. The empty case sends a <code class="inline">low</code> priority message so it doesn't buzz the phone.</p>
+    </div>
+  </div>
+</section>
+
+<!-- SAMPLE OUTPUT -->
+<section>
+  <h2><span class="num">6</span> What lands on the phone</h2>
+  <p class="lead">A single notification per run. Title is the at-a-glance summary; tap to expand for the bullet detail.</p>
+  <div class="grid-2" style="align-items: start;">
+    <div>
+      <div class="phone-mock">
+        <div class="notif">
+          <div class="app">
+            <span class="dot"></span>
+            <span>ntfy · now</span>
+          </div>
+          <div class="title">Next 7d: 2 ($30.48) | Week after: 1 ($9.99)</div>
+          <pre class="body">== Next 7 days (2) - $30.48 ==
+• Amazon — Thu May 28 — $14.99
+• Renters insurance — Sat May 30 — $15.49
+
+== The week after (days 8-14) (1) - $9.99 ==
+• Spotify — Mon Jun 01 — $9.99</pre>
+        </div>
+      </div>
+    </div>
+    <div>
+      <h3>Title shapes by state</h3>
+      <table>
+        <tr><th>State</th><th>Title</th></tr>
+        <tr><td>Both buckets</td><td><code>Next 7d: 2 ($30) | Week after: 1 ($10)</code></td></tr>
+        <tr><td>Near only</td><td><code>2 renewal(s) in next 7 days - $30</code></td></tr>
+        <tr><td>Far only</td><td><code>Nothing this week. 1 renewal(s) the week after - $10</code></td></tr>
+        <tr><td>Empty</td><td><code>No renewals in the next 14 days</code> <em>(low pri)</em></td></tr>
+      </table>
+      <p style="color:var(--text-dim); margin-top: 16px; font-size:0.9rem;">
+        Tags (<code class="inline">moneybag,calendar</code>) become emoji prefixes on Android. Priority controls vibration/heads-up behavior.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- CONFIG -->
+<section>
+  <h2><span class="num">7</span> Configuration</h2>
+  <p class="lead">Everything's an env var. Secrets live in GitHub repo settings; non-sensitive overrides live in the workflow file.</p>
+  <div class="card">
+    <table>
+      <tr>
+        <th>Variable</th><th>Required</th><th>Default</th><th>Notes</th>
+      </tr>
+      <tr><td><code>NOTION_TOKEN</code></td><td><span class="req y">yes</span></td><td>—</td><td>Internal integration secret. Repo secret.</td></tr>
+      <tr><td><code>NOTION_DATABASE_ID</code></td><td><span class="req y">yes</span></td><td>—</td><td>32-char hex. Repo secret.</td></tr>
+      <tr><td><code>NTFY_TOPIC</code></td><td><span class="req y">yes</span></td><td>—</td><td>Long random string. Repo secret.</td></tr>
+      <tr><td><code>NTFY_SERVER</code></td><td><span class="req n">no</span></td><td><code>https://ntfy.sh</code></td><td>Override for self-hosted ntfy.</td></tr>
+      <tr><td><code>DATE_PROPERTY</code></td><td><span class="req n">no</span></td><td><code>Next Billing Date</code></td><td>Notion column name (case-sensitive).</td></tr>
+      <tr><td><code>NAME_PROPERTY</code></td><td><span class="req n">no</span></td><td><code>Name</code></td><td>Title column name.</td></tr>
+      <tr><td><code>COST_PROPERTY</code></td><td><span class="req n">no</span></td><td><code>Cost Per Unit</code></td><td>Cost column name.</td></tr>
+      <tr><td><code>COST_TYPE</code></td><td><span class="req n">no</span></td><td><code>number</code></td><td><code>number</code> or <code>rich_text</code>.</td></tr>
+      <tr><td><code>CURRENCY</code></td><td><span class="req n">no</span></td><td><code>$</code></td><td>Prefix only — no FX conversion.</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- WORKFLOW -->
+<section>
+  <h2><span class="num">8</span> The workflow file</h2>
+  <p class="lead">Twenty lines of YAML. Cron + manual trigger + three steps.</p>
+  <pre><span class="k">on</span>:
+  <span class="k">schedule</span>:
+    <span class="c"># Cron is UTC, no DST. 17:00 UTC = 10:00 AM PDT Mondays.</span>
+    - <span class="k">cron</span>: <span class="s">"0 17 * * 1"</span>
+  <span class="k">workflow_dispatch</span>:            <span class="c"># manual "Run workflow" button</span>
+
+<span class="k">jobs</span>:
+  <span class="k">notify</span>:
+    <span class="k">runs-on</span>: ubuntu-latest
+    <span class="k">timeout-minutes</span>: <span class="n">5</span>
+    <span class="k">env</span>:
+      <span class="k">DATE_PROPERTY</span>: <span class="s">"Next Billing Date"</span>
+      <span class="k">COST_TYPE</span>: <span class="s">"number"</span>
+      <span class="k">CURRENCY</span>: <span class="s">"$"</span>
+    <span class="k">steps</span>:
+      - <span class="k">uses</span>: actions/checkout@v4
+      - <span class="k">uses</span>: actions/setup-python@v5
+        <span class="k">with</span>: { <span class="k">python-version</span>: <span class="s">"3.12"</span>, <span class="k">cache</span>: <span class="s">"pip"</span> }
+      - <span class="k">run</span>: pip install -r requirements.txt
+      - <span class="k">env</span>:
+          <span class="k">NOTION_TOKEN</span>: <span class="s">${{ secrets.NOTION_TOKEN }}</span>
+          <span class="k">NOTION_DATABASE_ID</span>: <span class="s">${{ secrets.NOTION_DATABASE_ID }}</span>
+          <span class="k">NTFY_TOPIC</span>: <span class="s">${{ secrets.NTFY_TOPIC }}</span>
+        <span class="k">run</span>: python subscription_notifier.py</pre>
+</section>
+
+<!-- DESIGN DECISIONS -->
+<section>
+  <h2><span class="num">9</span> Notable design decisions</h2>
+  <div class="grid-2">
+    <div class="card">
+      <h3>No state between runs</h3>
+      <p style="color:var(--text-dim); margin:0;">Each run is a pure function of "today's date" + the current Notion DB. No checkpoints to corrupt, no "did I send this already?" bookkeeping. If a run is missed, the next one still tells the truth.</p>
+    </div>
+    <div class="card">
+      <h3>Single dependency</h3>
+      <p style="color:var(--text-dim); margin:0;">Just <code class="inline">requests</code>. The Notion SDK was avoided — two HTTP endpoints don't justify the dependency footprint, and the bare API is well-documented enough to use directly.</p>
+    </div>
+    <div class="card">
+      <h3>Fail loud, not silent</h3>
+      <p style="color:var(--text-dim); margin:0;">Every HTTP error calls <code class="inline">raise_for_status()</code>. A bad token, a moved database, a renamed column — anything wrong becomes a red Actions run in GitHub, not a silent skipped notification.</p>
+    </div>
+    <div class="card">
+      <h3>Tolerant extraction</h3>
+      <p style="color:var(--text-dim); margin:0;">Cost columns can be number or text. Date columns can be plain or formula. Missing dates default to the near bucket. The script reads imperfect input and never crashes on a single weird row.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <p>~270 lines of Python · 20 lines of YAML · 0 servers · costs nothing</p>
+  <p style="margin-top:6px;">Local test: <code>set -a; source .env.local; set +a; python subscription_notifier.py</code></p>
+</footer>
+
+</main>
+</body>
+</html>
