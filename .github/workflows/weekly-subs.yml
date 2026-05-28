@@ -17,6 +17,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
+      # Opt into Node.js 24 for JavaScript actions. Silences the deprecation
+      # warning on actions/checkout + actions/setup-python and gets us off
+      # Node 20 ahead of the June 2026 forced cutover. Remove once the
+      # pinned actions ship a major version that defaults to Node 24.
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
       # Edit these to match your Notion database column names / cost type / currency.
       DATE_PROPERTY: "Next Billing Date"
       NAME_PROPERTY: "Name"
